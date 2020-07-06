@@ -84,35 +84,45 @@ var minTopicSize = p2p_pubsub.WithReadiness(p2p_pubsub.MinTopicSize(1))
 func (ps *PubSubAPI) Publish(ctx context.Context, topic string, msg []byte) error {
 	ps.logger.Debug("publishing", zap.String("topic", topic), zap.Int("msglen", len(msg)))
 
-	t, err := ps.getTopic(topic)
-	if err != nil {
-		ps.logger.Warn("unable to get topic", zap.Error(err))
-		return err
-	}
+	// t, err := ps.getTopic(topic)
+	// if err != nil {
+	// 	ps.logger.Warn("unable to get topic", zap.Error(err))
+	// 	return err
+	// }
 
-	peers := t.ListPeers()
-	if len(peers) == 0 {
-		ps.logger.Warn("no peers connected to this topic...", zap.String("topic", topic))
-	}
+	// peers := t.ListPeers()
+	// if len(peers) == 0 {
+	// 	ps.logger.Warn("no peers connected to this topic...", zap.String("topic", topic))
+	// }
 
-	return t.Publish(context.Background(), msg, minTopicSize)
+	// go func() {
+	// 	if err := t.Publish(ctx, msg, minTopicSize); err != nil {
+	// 		ps.logger.Warn("publish error", zap.Error(err))
+	// 	}
+	// }()
+
+	return ps.PubSub.Publish(topic, msg)
 }
 
 // Subscribe to messages on a given topic
 func (ps *PubSubAPI) Subscribe(ctx context.Context, topic string, opts ...ipfs_iopts.PubSubSubscribeOption) (ipfs_interface.PubSubSubscription, error) {
-	t, err := ps.getTopic(topic)
+	// t, err := ps.getTopic(topic)
+	// if err != nil {
+	// 	ps.logger.Warn("unable to join topic", zap.Error(err))
+	// 	return nil, err
+	// }
+
+	// ps.logger.Debug("subscribing:", zap.String("topic", topic))
+	// sub, err := t.Subscribe()
+	// if err != nil {
+	// 	ps.logger.Warn("unable to subscribe to topic", zap.String("topic", topic), zap.Error(err))
+	// 	return nil, err
+	// }
+
+	sub, err := ps.PubSub.Subscribe(topic)
 	if err != nil {
-		ps.logger.Warn("unable to join topic", zap.Error(err))
 		return nil, err
 	}
-
-	ps.logger.Debug("subscribing:", zap.String("topic", topic))
-	sub, err := t.Subscribe()
-	if err != nil {
-		ps.logger.Warn("unable to subscribe to topic", zap.String("topic", topic), zap.Error(err))
-		return nil, err
-	}
-
 	return &pubsubSubscriptionAPI{ps.logger, sub}, nil
 }
 
