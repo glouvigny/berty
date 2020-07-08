@@ -106,7 +106,7 @@ func createPeersWithGroup(ctx context.Context, t testing.TB, pathBase string, me
 
 			mk := NewInMemMessageKeystore()
 
-			db, err := newBertyOrbitDB(ctx, ca, devKS, mk, nil)
+			db, err := newBertyOrbitDB(ctx, ca.API(), devKS, mk, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

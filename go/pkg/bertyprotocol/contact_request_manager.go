@@ -3,7 +3,10 @@ package bertyprotocol
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"berty.tech/berty/v2/go/internal/handshake"
 	"berty.tech/berty/v2/go/internal/ipfsutil"
@@ -20,9 +23,9 @@ import (
 type pendingRequest struct {
 	cancel      context.CancelFunc
 	contact     *bertytypes.ShareableContact
-	lock        sync.Mutex
+	lock        *LockerTest
 	ch          chan peer.AddrInfo
-	swiper      *swiper
+	swiper      *Swiper
 	ownMetadata []byte
 }
 
@@ -46,9 +49,13 @@ func (p *pendingRequest) update(ctx context.Context, contact *bertytypes.Shareab
 
 	p.swiper.logger.Info("enqueued request updated")
 
-	for addr := range p.swiper.watch(ctx, contact.PK, contact.PublicRendezvousSeed) {
+	for addr := range p.swiper.WatchTopic(ctx, contact.PK, contact.PublicRendezvousSeed) {
+		p.swiper.logger.Info("get peer on topic")
 		p.lock.Lock()
+
+		p.swiper.logger.Info("sending them")
 		if ctx.Err() == nil {
+			p.swiper.logger.Info("sending them ok")
 			p.ch <- addr
 		}
 		p.lock.Unlock()
@@ -67,9 +74,10 @@ func (p *pendingRequest) Close() error {
 	return nil
 }
 
-func newPendingRequest(ctx context.Context, swiper *swiper, contact *bertytypes.ShareableContact, ownMetadata []byte) (*pendingRequest, chan peer.AddrInfo) {
+func newPendingRequest(ctx context.Context, swiper *Swiper, contact *bertytypes.ShareableContact, ownMetadata []byte) (*pendingRequest, chan peer.AddrInfo) {
 	ch := make(chan peer.AddrInfo)
 	p := &pendingRequest{
+		lock:        NewLockerTest("pendingRequest"),
 		ch:          ch,
 		swiper:      swiper,
 		ownMetadata: ownMetadata,
@@ -85,12 +93,12 @@ type contactRequestsManager struct {
 	seed           []byte
 	announceCancel context.CancelFunc
 	metadataStore  *metadataStore
-	lock           sync.Mutex
+	lock           *LockerTest
 	ipfs           ipfsutil.ExtendedCoreAPI
 	accSK          crypto.PrivKey
 	ctx            context.Context
 	logger         *zap.Logger
-	swiper         *swiper
+	swiper         *Swiper
 	toAdd          map[string]*pendingRequest
 }
 
@@ -185,30 +193,37 @@ func (c *contactRequestsManager) enqueueRequest(contact *bertytypes.ShareableCon
 		return err
 	}
 
+	c.logger.Debug("ENQUEUE REQUEST 1")
 	if pending, ok := c.toAdd[string(contact.PK)]; ok {
 		go pending.update(c.ctx, contact, ownMetadata)
+		c.logger.Debug("ENQUEUE REQUEST 1.1")
 	} else {
+		c.logger.Debug("ENQUEUE REQUEST 2.1")
 		var ch chan peer.AddrInfo
 		c.toAdd[string(contact.PK)], ch = newPendingRequest(c.ctx, c.swiper, contact, ownMetadata)
 
-		go func(pk crypto.PubKey, ch chan peer.AddrInfo) {
-			for addr := range ch {
+		c.logger.Debug("ENQUEUE REQUEST 2.2")
+		for addr := range ch {
+			go func(pk crypto.PubKey, addr peer.AddrInfo) {
 				if err := c.ipfs.Swarm().Connect(c.ctx, addr); err != nil {
 					c.logger.Error("error while connecting with other peer", zap.Error(err))
-					continue
+					return
 				}
 
 				stream, err := c.ipfs.NewStream(context.TODO(), addr.ID, contactRequestV1)
 				if err != nil {
 					c.logger.Error("error while opening stream with other peer", zap.Error(err))
-					continue
+					return
 				}
 
-				c.performSend(pk, stream)
-			}
-		}(pk, ch)
+				if err := c.performSend(pk, stream); err != nil {
+					c.logger.Error("unable to perform send", zap.Error(err))
+				}
+			}(pk, addr)
+		}
 	}
 
+	c.logger.Debug("ENQUEUE REQUEST END")
 	return nil
 }
 
@@ -253,6 +268,7 @@ func (c *contactRequestsManager) metadataWatcher(ctx context.Context) {
 				continue
 			}
 
+			c.logger.Debug("METADATA WATCHER", zap.String("event", e.Metadata.EventType.String()))
 			c.lock.Lock()
 			if err := handlers[e.Metadata.EventType](e); err != nil {
 				c.lock.Unlock()
@@ -316,35 +332,26 @@ func (c *contactRequestsManager) incomingHandler(stream network.Stream) {
 	}
 }
 
-func (c *contactRequestsManager) performSend(otherPK crypto.PubKey, stream network.Stream) {
+func (c *contactRequestsManager) performSend(otherPK crypto.PubKey, stream network.Stream) error {
 	defer func() {
 		if err := p2phelpers.FullClose(stream); err != nil {
 			c.logger.Warn("error while closing stream with other peer", zap.Error(err))
 		}
 	}()
 
-	c.lock.Lock()
-	if c.metadataStore.checkContactStatus(otherPK, bertytypes.ContactStateAdded) {
-		// Nothing to do, contact has already been requested
-		c.lock.Unlock()
-		return
-	}
-	c.lock.Unlock()
-
 	_, contact := c.metadataStore.GetIncomingContactRequestsStatus()
 	if contact == nil {
-		c.logger.Error("unable to retrieve own contact information")
-		return
+		return fmt.Errorf("unable to retrieve own contact information")
 	}
 
 	pkB, err := otherPK.Raw()
 	if err != nil {
-		return
+		return fmt.Errorf("unable to get raw pk: %w", err)
 	}
 
 	ownMetadata, err := c.metadataStore.GetRequestOwnMetadataForContact(pkB)
 	if err != nil {
-		c.logger.Error("unable to get own metadata for contact", zap.Error(err))
+		err = fmt.Errorf("unable to get own metadata for contact: `%w`", err)
 		ownMetadata = nil
 	}
 
@@ -354,19 +361,18 @@ func (c *contactRequestsManager) performSend(otherPK crypto.PubKey, stream netwo
 	writer := ggio.NewDelimitedWriter(stream)
 
 	if err := handshake.RequestUsingReaderWriter(reader, writer, c.accSK, otherPK); err != nil {
-		c.logger.Error("an error occurred during handshake", zap.Error(err))
-		return
+		return fmt.Errorf("an error occurred during handshake: %w", err)
 	}
 
 	if err := writer.WriteMsg(contact); err != nil {
-		c.logger.Error("an error occurred while sending own contact information", zap.Error(err))
-		return
+		return fmt.Errorf("an error occurred while sending own contact information: %w", err)
 	}
 
 	if _, err := c.metadataStore.ContactRequestOutgoingSent(c.ctx, otherPK); err != nil {
-		c.logger.Error("an error occurred while marking contact request as sent", zap.Error(err))
-		return
+		return fmt.Errorf("an error occurred while marking contact request as sent: %w", err)
 	}
+
+	return nil
 }
 
 func (c *contactRequestsManager) enableIncomingRequests() error {
@@ -382,12 +388,12 @@ func (c *contactRequestsManager) enableIncomingRequests() error {
 	var ctx context.Context
 
 	ctx, c.announceCancel = context.WithCancel(c.ctx)
-	c.swiper.announce(ctx, pkBytes, c.seed)
+	c.swiper.Announce(ctx, pkBytes, c.seed)
 
 	return nil
 }
 
-func initContactRequestsManager(ctx context.Context, s *swiper, store *metadataStore, ipfs ipfsutil.ExtendedCoreAPI, logger *zap.Logger) error {
+func initContactRequestsManager(ctx context.Context, s *Swiper, store *metadataStore, ipfs ipfsutil.ExtendedCoreAPI, logger *zap.Logger) error {
 	sk, err := store.devKS.AccountPrivKey()
 	if err != nil {
 		return err
@@ -397,6 +403,7 @@ func initContactRequestsManager(ctx context.Context, s *swiper, store *metadataS
 		metadataStore: store,
 		ipfs:          ipfs,
 		logger:        logger,
+		lock:          NewLockerTest("contactRequestManager"),
 		accSK:         sk,
 		ctx:           ctx,
 		swiper:        s,
@@ -406,4 +413,65 @@ func initContactRequestsManager(ctx context.Context, s *swiper, store *metadataS
 	go cm.metadataWatcher(ctx)
 
 	return nil
+}
+
+var lockCount = 0
+
+type LockerTest struct {
+	name string
+	m    sync.Mutex
+	inc  uint32
+}
+
+func NewLockerTest(name string) *LockerTest {
+	lockCount++
+	return &LockerTest{
+		name: fmt.Sprintf("(#%d)%s", lockCount, name),
+	}
+}
+
+func (l *LockerTest) Lock() {
+	fr := getFrame(1)
+	zap.L().Debug(fmt.Sprintf("%s |-- Lock(%s:%d) [%d]",
+		l.name,
+		fr.Func.Name(),
+		fr.Line,
+		atomic.AddUint32(&l.inc, uint32(1))),
+	)
+	l.m.Lock()
+}
+
+func (l *LockerTest) Unlock() {
+	l.m.Unlock()
+	fr := getFrame(1)
+	zap.L().Debug(fmt.Sprintf("%s |-- Unlock(%s:%d) [%d]",
+		l.name,
+		fr.Func.Name(),
+		fr.Line,
+		atomic.AddUint32(&l.inc, ^uint32(0)),
+	))
+
+}
+
+func getFrame(skipFrames int) runtime.Frame {
+	// We need the frame at index skipFrames+2, since we never want runtime.Callers and getFrame
+	targetFrameIndex := skipFrames + 2
+
+	// Set size to targetFrameIndex+2 to ensure we have room for one more caller than we need
+	programCounters := make([]uintptr, targetFrameIndex+2)
+	n := runtime.Callers(0, programCounters)
+
+	frame := runtime.Frame{Function: "unknown"}
+	if n > 0 {
+		frames := runtime.CallersFrames(programCounters[:n])
+		for more, frameIndex := true, 0; more && frameIndex <= targetFrameIndex; frameIndex++ {
+			var frameCandidate runtime.Frame
+			frameCandidate, more = frames.Next()
+			if frameIndex == targetFrameIndex {
+				frame = frameCandidate
+			}
+		}
+	}
+
+	return frame
 }

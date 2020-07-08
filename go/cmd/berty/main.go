@@ -47,6 +47,7 @@ import (
 	peer "github.com/libp2p/go-libp2p-core/peer"
 	peerstore "github.com/libp2p/go-libp2p-core/peerstore"
 	discovery "github.com/libp2p/go-libp2p-discovery"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	qrterminal "github.com/mdp/qrterminal/v3"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/oklog/run"
@@ -324,26 +325,59 @@ func main() {
 			defer cleanup()
 
 			var (
-				node         *core.IpfsNode
-				api          ipfsutil.ExtendedCoreAPI
-				tinderDriver tinder.Driver
+				node *core.IpfsNode
+				api  ipfsutil.ExtendedCoreAPI
+				ps   *pubsub.PubSub
+				disc tinder.Driver
 			)
 
 			{
+
+				rdvpeer, err := parseRdvpMaddr(ctx, rdvpMaddr, logger)
+				if err != nil {
+					return errcode.TODO.Wrap(err)
+				}
+
 				// var err error
 				var bopts = ipfsutil.CoreAPIConfig{
 					SwarmAddrs:        DefaultSwarmAddrs,
 					APIAddrs:          DefaultAPIAddrs,
 					APIConfig:         APIConfig,
 					ExtraLibp2pOption: libp2p.ChainOptions(libp2p.Transport(mc.NewTransportConstructorWithLogger(logger))),
+					HostConfig: func(h host.Host) error {
+						var err error
+
+						h.Peerstore().AddAddrs(rdvpeer.ID, rdvpeer.Addrs, peerstore.PermanentAddrTTL)
+						// @FIXME(gfanton): use rand as argument
+						rdvClient := tinder.NewRendezvousDiscovery(logger, h, rdvpeer.ID,
+							rand.New(rand.NewSource(rand.Int63())))
+
+						minBackoff, maxBackoff := time.Second, time.Minute
+						rng := rand.New(rand.NewSource(rand.Int63()))
+						disc, err = tinder.NewService(
+							logger,
+							rdvClient,
+							discovery.NewExponentialBackoff(minBackoff, maxBackoff, discovery.FullJitter, time.Second, 5.0, 0, rng),
+						)
+						if err != nil {
+							return err
+						}
+
+						ps, err = pubsub.NewGossipSub(ctx, h,
+							pubsub.WithMessageSigning(true),
+							pubsub.WithFloodPublish(true),
+							pubsub.WithDiscovery(disc),
+						)
+
+						if err != nil {
+							return err
+						}
+
+						return nil
+					},
 				}
 
 				bopts.BootstrapAddrs = DefaultBootstrap
-
-				rdvpeer, err := parseRdvpMaddr(ctx, rdvpMaddr, logger)
-				if err != nil {
-					return errcode.TODO.Wrap(err)
-				}
 
 				if api, node, err = ipfsutil.NewCoreAPI(ctx, &bopts); err != nil {
 					return err
@@ -368,10 +402,6 @@ func main() {
 				// 	bopts.BootstrapAddrs = append(bopts.BootstrapAddrs, rdvpMaddr)
 				// }
 
-				if rdvpeer == nil {
-					return fmt.Errorf("unable to start without a valid rdvp")
-				}
-
 				node.Peerstore.AddAddrs(rdvpeer.ID, rdvpeer.Addrs, peerstore.PermanentAddrTTL)
 				// @FIXME(gfanton): use rand as argument
 				rdvClient := tinder.NewRendezvousDiscovery(logger, node.PeerHost, rdvpeer.ID,
@@ -387,11 +417,7 @@ func main() {
 					return err
 				}
 
-				psapi, err := ipfsutil.NewPubSubAPI(ctx, logger.Named("ps"), disc, node.PeerHost)
-				if err != nil {
-					return err
-				}
-
+				psapi := ipfsutil.NewPubSubAPI(ctx, logger.Named("ps"), disc, ps)
 				api = ipfsutil.InjectPubSubCoreAPIExtendedAdaptater(api, psapi)
 
 				if globalPOIDebug {
@@ -403,24 +429,6 @@ func main() {
 
 				// serve the embedded ipfs webui
 				ipfsutil.ServeHTTPWebui(logger)
-
-				if rdvpForce {
-					go func() {
-						// monitor rdv peer
-						if err := monitorPeers(logger, node.PeerHost, rdvpeer.ID); err != nil {
-							logger.Error("monitorPeers", zap.Error(err))
-						}
-					}()
-
-					for {
-						if err := node.PeerHost.Connect(ctx, *rdvpeer); err != nil {
-							logger.Error("cannot dial rendez-vous point", zap.Error(err))
-						} else {
-							break
-						}
-						time.Sleep(time.Second)
-					}
-				}
 			}
 
 			// listeners for berty
@@ -510,7 +518,8 @@ func main() {
 				// initialize new protocol client
 				opts := bertyprotocol.Opts{
 					Host:            node.PeerHost,
-					TinderDriver:    tinderDriver,
+					PubSub:          ps,
+					TinderDriver:    disc,
 					IpfsCoreAPI:     api,
 					Logger:          logger.Named("protocol"),
 					RootContext:     ctx,

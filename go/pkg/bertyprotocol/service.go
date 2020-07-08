@@ -12,12 +12,12 @@ import (
 	"berty.tech/berty/v2/go/pkg/errcode"
 	orbitdb "berty.tech/go-orbit-db"
 	"berty.tech/go-orbit-db/cache"
-	"berty.tech/go-orbit-db/pubsub/directchannel"
 	"github.com/ipfs/go-datastore"
 	ds_sync "github.com/ipfs/go-datastore/sync"
 
 	ipfs_core "github.com/ipfs/go-ipfs/core"
 	"github.com/libp2p/go-libp2p-core/host"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +35,7 @@ type service struct {
 	// variables
 	ctx            context.Context
 	logger         *zap.Logger
+	pubsub         *pubsub.PubSub
 	ipfsCoreAPI    ipfsutil.ExtendedCoreAPI
 	odb            *bertyOrbitDB
 	accountGroup   *groupContext
@@ -58,6 +59,7 @@ type Opts struct {
 	TinderDriver           tinder.Driver
 	RendezvousRotationBase time.Duration
 	Host                   host.Host
+	PubSub                 *pubsub.PubSub
 	close                  func() error
 }
 
@@ -128,9 +130,9 @@ func New(opts Opts) (Service, error) {
 		Tracer:    tracer.New("berty-orbitdb"),
 	}
 
-	if opts.Host != nil {
-		odbOpts.DirectChannelFactory = directchannel.InitDirectChannelFactory(opts.Host)
-	}
+	// if opts.Host != nil {
+	// 	odbOpts.DirectChannelFactory = directchannel.InitDirectChannelFactory(opts.Host)
+	// }
 
 	odb, err := newBertyOrbitDB(opts.RootContext, opts.IpfsCoreAPI, opts.DeviceKeystore, opts.MessageKeystore, odbOpts)
 	if err != nil {
@@ -143,7 +145,7 @@ func New(opts Opts) (Service, error) {
 	}
 
 	if opts.TinderDriver != nil {
-		s := newSwiper(opts.TinderDriver, opts.Logger, opts.RendezvousRotationBase)
+		s := NewSwiper(opts.Logger, opts.PubSub, opts.RendezvousRotationBase)
 		opts.Logger.Debug("tinder swiper is enabled")
 
 		if err := initContactRequestsManager(opts.RootContext, s, acc.metadataStore, opts.IpfsCoreAPI, opts.Logger); err != nil {

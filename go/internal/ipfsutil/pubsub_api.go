@@ -25,24 +25,14 @@ type PubSubAPI struct {
 	topics   map[string]*p2p_pubsub.Topic
 }
 
-func NewPubSubAPI(ctx context.Context, logger *zap.Logger, disc p2p_disc.Discovery, h p2p_host.Host) (ipfs_interface.PubSubAPI, error) {
-	ps, err := p2p_pubsub.NewGossipSub(ctx, h,
-		p2p_pubsub.WithMessageSigning(true),
-		p2p_pubsub.WithFloodPublish(true),
-		p2p_pubsub.WithDiscovery(disc),
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
+func NewPubSubAPI(ctx context.Context, logger *zap.Logger, disc p2p_disc.Discovery, ps *p2p_pubsub.PubSub) ipfs_interface.PubSubAPI {
 	return &PubSubAPI{
-		host:   h,
-		disc:   disc,
 		PubSub: ps,
+
+		disc:   disc,
 		logger: logger,
 		topics: make(map[string]*p2p_pubsub.Topic),
-	}, nil
+	}
 }
 
 func (ps *PubSubAPI) getTopic(topic string) (*p2p_pubsub.Topic, error) {
