@@ -113,6 +113,7 @@ func (ps *PubSubAPI) Subscribe(ctx context.Context, topic string, opts ...ipfs_i
 	if err != nil {
 		return nil, err
 	}
+
 	return &pubsubSubscriptionAPI{ps.logger, sub}, nil
 }
 

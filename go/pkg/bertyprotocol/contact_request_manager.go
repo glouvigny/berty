@@ -7,17 +7,19 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"berty.tech/berty/v2/go/internal/handshake"
-	"berty.tech/berty/v2/go/internal/ipfsutil"
-	"berty.tech/berty/v2/go/pkg/bertytypes"
-	"berty.tech/berty/v2/go/pkg/errcode"
 	ggio "github.com/gogo/protobuf/io"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	p2phelpers "github.com/libp2p/go-libp2p-core/helpers"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"go.uber.org/zap"
+
+	"berty.tech/berty/v2/go/internal/handshake"
+	"berty.tech/berty/v2/go/internal/ipfsutil"
+	"berty.tech/berty/v2/go/pkg/bertytypes"
+	"berty.tech/berty/v2/go/pkg/errcode"
 )
 
 type pendingRequest struct {
@@ -30,13 +32,15 @@ type pendingRequest struct {
 }
 
 func (p *pendingRequest) update(ctx context.Context, contact *bertytypes.ShareableContact, ownMetadata []byte) {
-	p.lock.Lock()
+	p.lock.RLock()
+	currentContact := p.contact
+	p.lock.RUnlock()
 
-	if p.contact != nil && bytes.Equal(p.contact.PublicRendezvousSeed, contact.PublicRendezvousSeed) {
-		p.lock.Unlock()
+	if currentContact != nil && bytes.Equal(currentContact.PublicRendezvousSeed, contact.PublicRendezvousSeed) {
 		return
 	}
 
+	p.lock.Lock()
 	if p.cancel != nil {
 		p.cancel()
 	}
@@ -56,7 +60,12 @@ func (p *pendingRequest) update(ctx context.Context, contact *bertytypes.Shareab
 		p.swiper.logger.Info("sending them")
 		if ctx.Err() == nil {
 			p.swiper.logger.Info("sending them ok")
-			p.ch <- addr
+
+			select {
+			case p.ch <- addr:
+			case <-time.After(time.Second):
+				fmt.Println("timed out")
+			}
 		}
 		p.lock.Unlock()
 	}
@@ -64,11 +73,11 @@ func (p *pendingRequest) update(ctx context.Context, contact *bertytypes.Shareab
 
 func (p *pendingRequest) Close() error {
 	p.lock.Lock()
+	close(p.ch)
 	if p.cancel != nil {
 		p.cancel()
 	}
 
-	close(p.ch)
 	p.lock.Unlock()
 
 	return nil
@@ -199,8 +208,8 @@ func (c *contactRequestsManager) enqueueRequest(contact *bertytypes.ShareableCon
 		c.logger.Debug("ENQUEUE REQUEST 1.1")
 	} else {
 		c.logger.Debug("ENQUEUE REQUEST 2.1")
-		var ch chan peer.AddrInfo
-		c.toAdd[string(contact.PK)], ch = newPendingRequest(c.ctx, c.swiper, contact, ownMetadata)
+		toAdd, ch := newPendingRequest(c.ctx, c.swiper, contact, ownMetadata)
+		c.toAdd[string(contact.PK)] = toAdd
 
 		c.logger.Debug("ENQUEUE REQUEST 2.2")
 		for addr := range ch {
@@ -419,7 +428,7 @@ var lockCount = 0
 
 type LockerTest struct {
 	name string
-	m    sync.Mutex
+	m    sync.RWMutex
 	inc  uint32
 }
 
@@ -443,6 +452,29 @@ func (l *LockerTest) Lock() {
 
 func (l *LockerTest) Unlock() {
 	l.m.Unlock()
+	fr := getFrame(1)
+	zap.L().Debug(fmt.Sprintf("%s |-- Unlock(%s:%d) [%d]",
+		l.name,
+		fr.Func.Name(),
+		fr.Line,
+		atomic.AddUint32(&l.inc, ^uint32(0)),
+	))
+
+}
+
+func (l *LockerTest) RLock() {
+	fr := getFrame(1)
+	zap.L().Debug(fmt.Sprintf("%s |-- Lock(%s:%d) [%d]",
+		l.name,
+		fr.Func.Name(),
+		fr.Line,
+		atomic.AddUint32(&l.inc, uint32(1))),
+	)
+	l.m.RLock()
+}
+
+func (l *LockerTest) RUnlock() {
+	l.m.RUnlock()
 	fr := getFrame(1)
 	zap.L().Debug(fmt.Sprintf("%s |-- Unlock(%s:%d) [%d]",
 		l.name,

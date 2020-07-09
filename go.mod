@@ -65,3 +65,5 @@ require (
 	moul.io/godev v1.6.0
 	moul.io/srand v1.4.0
 )
+
+replace berty.tech/go-orbit-db => /Users/guillaume/go/src/berty.tech/go-orbit-db/
