@@ -9,20 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"berty.tech/berty/v2/go/internal/config"
-	"berty.tech/berty/v2/go/internal/ipfsutil"
-	mc "berty.tech/berty/v2/go/internal/multipeer-connectivity-transport"
-	"berty.tech/berty/v2/go/internal/tinder"
-	"berty.tech/berty/v2/go/internal/tracer"
-	"berty.tech/berty/v2/go/pkg/bertymessenger"
-	"berty.tech/berty/v2/go/pkg/bertyprotocol"
-	"berty.tech/berty/v2/go/pkg/errcode"
 	badger_opts "github.com/dgraph-io/badger/options"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
 	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
-	datastore "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore"
 	ds_sync "github.com/ipfs/go-datastore/sync"
 	ipfs_badger "github.com/ipfs/go-ds-badger"
 	"github.com/ipfs/go-ipfs/core"
@@ -30,7 +22,7 @@ import (
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/peer"
-	peerstore "github.com/libp2p/go-libp2p-core/peerstore"
+	"github.com/libp2p/go-libp2p-core/peerstore"
 	"github.com/libp2p/go-libp2p-core/routing"
 	discovery "github.com/libp2p/go-libp2p-discovery"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -40,6 +32,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"berty.tech/berty/v2/go/internal/config"
+	"berty.tech/berty/v2/go/internal/ipfsutil"
+	mc "berty.tech/berty/v2/go/internal/multipeer-connectivity-transport"
+	"berty.tech/berty/v2/go/internal/tinder"
+	"berty.tech/berty/v2/go/internal/tracer"
+	"berty.tech/berty/v2/go/pkg/bertyprotocol"
+	"berty.tech/berty/v2/go/pkg/errcode"
 )
 
 var (
@@ -58,7 +58,8 @@ type Protocol struct {
 	service bertyprotocol.Service
 
 	// protocol datastore
-	ds datastore.Batching
+	ds             datastore.Batching
+	protocolClient bertyprotocol.Client
 }
 
 type ProtocolConfig struct {
@@ -116,7 +117,7 @@ func (pc *ProtocolConfig) DisableLocalDiscovery() {
 	pc.localDiscovery = false
 }
 
-func NewProtocolBridge(config *ProtocolConfig) (*Protocol, error) {
+func NewProtocolBridge(ctx context.Context, config *ProtocolConfig) (*Protocol, error) {
 	// setup logger
 	var logger *zap.Logger
 	{
@@ -133,12 +134,10 @@ func NewProtocolBridge(config *ProtocolConfig) (*Protocol, error) {
 		}
 	}
 
-	return newProtocolBridge(logger, config)
+	return newProtocolBridge(ctx, logger, config)
 }
 
-func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, error) {
-	ctx := context.Background()
-
+func newProtocolBridge(ctx context.Context, logger *zap.Logger, config *ProtocolConfig) (*Protocol, error) {
 	// setup coreapi if needed
 	var (
 		api  ipfsutil.ExtendedCoreAPI
@@ -226,7 +225,7 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 			ipfsutil.ServeHTTPWebui(logger)
 
 			if config.poiDebug {
-				ipfsutil.EnableConnLogger(logger, node.PeerHost)
+				ipfsutil.EnableConnLogger(ctx, logger, node.PeerHost)
 			}
 		}
 	}
@@ -273,7 +272,7 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 			protocolOpts.Host = node.PeerHost
 		}
 
-		service, err = bertyprotocol.New(protocolOpts)
+		service, err = bertyprotocol.New(ctx, protocolOpts)
 		if err != nil {
 			return nil, errcode.TODO.Wrap(err)
 		}
@@ -294,7 +293,7 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 		}
 
 		// setup grpc with zap
-		grpc_zap.ReplaceGrpcLoggerV2(grpcLogger)
+		// grpc_zap.ReplaceGrpcLoggerV2(grpcLogger)
 
 		trServer := tracer.New("grpc-server")
 		serverOpts := []grpc.ServerOption{
@@ -318,17 +317,20 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 	}
 
 	// register messenger service
+	var protocolClient bertyprotocol.Client
 	{
-		protocolClient, err := bertyprotocol.NewClient(service)
+		var err error
+		protocolClient, err = bertyprotocol.NewClient(ctx, service)
+
 		if err != nil {
 			return nil, errcode.TODO.Wrap(err)
 		}
-		opts := bertymessenger.Opts{
-			Logger:          logger.Named("messenger"),
-			ProtocolService: service,
-		}
-		messenger := bertymessenger.New(protocolClient, &opts)
-		bertymessenger.RegisterMessengerServiceServer(grpcServer, messenger)
+		// opts := bertymessenger.Opts{
+		// 	Logger:          logger.Named("messenger"),
+		// 	ProtocolService: service,
+		// }
+		// messenger := bertymessenger.New(protocolClient, &opts)
+		// bertymessenger.RegisterMessengerServiceServer(grpcServer, messenger)
 	}
 
 	// setup bridge
@@ -336,7 +338,7 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 	{
 		var err error
 
-		bridge, err = newBridge(grpcServer, logger, config.Config)
+		bridge, err = newBridge(ctx, grpcServer, logger, config.Config)
 		if err != nil {
 			return nil, err
 		}
@@ -348,6 +350,8 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 		service: service,
 		node:    node,
 
+		protocolClient: protocolClient,
+
 		ds: rootds,
 	}, nil
 }
@@ -355,6 +359,8 @@ func newProtocolBridge(logger *zap.Logger, config *ProtocolConfig) (*Protocol, e
 func (p *Protocol) Close() (err error) {
 	// Close bridge
 	p.Bridge.Close()
+
+	p.protocolClient.Close()
 
 	// close service
 	err = p.service.Close() // keep service error

@@ -5,17 +5,19 @@ import (
 	"os"
 	"testing"
 
-	"berty.tech/berty/v2/go/internal/ipfsutil"
-	"berty.tech/berty/v2/go/internal/testutil"
-	"berty.tech/berty/v2/go/pkg/bertyprotocol"
-	"berty.tech/berty/v2/go/pkg/bertytypes"
 	"github.com/gogo/protobuf/proto"
 	p2p_peer "github.com/libp2p/go-libp2p-core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+
+	"berty.tech/berty/v2/go/internal/ipfsutil"
+	"berty.tech/berty/v2/go/internal/testutil"
+	"berty.tech/berty/v2/go/pkg/bertyprotocol"
+	"berty.tech/berty/v2/go/pkg/bertytypes"
 )
 
 func TestProtocolBridge(t *testing.T) {
@@ -28,7 +30,28 @@ func TestProtocolBridge(t *testing.T) {
 		//results      [][]byte
 	)
 
-	ctx := context.Background()
+	_ = err
+	_ = protocol
+	_ = bridgeClient
+	_ = grpcClient
+	_ = req
+	_ = res
+
+	if os.Getenv("WITH_GOLEAK") == "1" {
+		defer goleak.VerifyNone(t,
+			goleak.IgnoreTopFunction("github.com/syndtr/goleveldb/leveldb.(*DB).mpoolDrain"),           // inherited from one of the imports (init)
+			goleak.IgnoreTopFunction("github.com/ipfs/go-log/writer.(*MirrorWriter).logRoutine"),       // inherited from one of the imports (init)
+			goleak.IgnoreTopFunction("github.com/libp2p/go-libp2p-connmgr.(*BasicConnMgr).background"), // inherited from github.com/ipfs/go-ipfs/core.NewNode
+			goleak.IgnoreTopFunction("github.com/jbenet/goprocess/periodic.callOnTicker.func1"),        // inherited from github.com/ipfs/go-ipfs/core.NewNode
+			goleak.IgnoreTopFunction("github.com/libp2p/go-libp2p-connmgr.(*decayer).process"),         // inherited from github.com/ipfs/go-ipfs/core.NewNode)
+			goleak.IgnoreTopFunction("go.opencensus.io/stats/view.(*worker).start"),                    // inherited from github.com/ipfs/go-ipfs/core.NewNode)
+			goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"),                        // inherited from github.com/ipfs/go-ipfs/core.NewNode)
+		)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	mc, cleanup := ipfsutil.TestingCoreAPI(ctx, t)
 	defer cleanup()
 
@@ -38,7 +61,7 @@ func TestProtocolBridge(t *testing.T) {
 	config.AddGRPCListener("/ip4/127.0.0.1/tcp/0/grpcweb")
 	config.ipfsCoreAPI(mc.API())
 
-	protocol, err = newProtocolBridge(logger, config)
+	protocol, err = newProtocolBridge(ctx, logger, config)
 	require.NoError(t, err)
 
 	defer func() {
@@ -54,12 +77,16 @@ func TestProtocolBridge(t *testing.T) {
 
 	// clients
 
-	bridgeClient, err = protocol.NewGRPCClient()
+	bridgeClient, cleanup, err = protocol.NewGRPCClient()
 	require.NoError(t, err)
 	assert.NotNil(t, bridgeClient)
 
+	defer cleanup()
+
 	grpcClient, err = grpc.Dial(protocol.GRPCListenerAddr(), grpc.WithBlock(), grpc.WithInsecure())
 	require.NoError(t, err)
+
+	defer func() { _ = grpcClient.Close() }()
 
 	// setup unary test
 	msg := &bertytypes.InstanceGetConfiguration_Request{}
@@ -68,7 +95,7 @@ func TestProtocolBridge(t *testing.T) {
 	require.NoError(t, err)
 
 	// bridgeClient test
-	res, err = bridgeClient.UnaryRequest("/berty.protocol.v1.ProtocolService/InstanceGetConfiguration", req)
+	res, err = bridgeClient.UnaryRequest(ctx, "/berty.protocol.v1.ProtocolService/InstanceGetConfiguration", req)
 	require.NoError(t, err)
 
 	out := &bertytypes.InstanceGetConfiguration_Reply{}
@@ -103,7 +130,8 @@ func TestPersistenceProtocol(t *testing.T) {
 	testutil.SkipSlow(t)
 	testutil.SkipUnstable(t)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	logger := testutil.Logger(t)
 	rootdir, err := ioutil.TempDir("", "ipfs")
@@ -120,15 +148,17 @@ func TestPersistenceProtocol(t *testing.T) {
 	var node_id_1 p2p_peer.ID
 	var device_pk_1 []byte
 	{
-		protocol, err := newProtocolBridge(logger, config)
+		protocol, err := newProtocolBridge(ctx, logger, config)
 		require.NoError(t, err)
 
 		// get grpc client
-		client, err := newServiceClient(protocol)
+		client, cleanup, err := newServiceClient(protocol)
 		if !assert.NoError(t, err) {
 			protocol.Close()
 			assert.FailNow(t, "unable to create client")
 		}
+
+		defer cleanup()
 
 		// get node id
 		node_id_1 = protocol.node.Identity
@@ -148,15 +178,17 @@ func TestPersistenceProtocol(t *testing.T) {
 	var device_pk_2 []byte
 	{
 
-		protocol, err := newProtocolBridge(logger, config)
+		protocol, err := newProtocolBridge(ctx, logger, config)
 		require.NoError(t, err)
 
 		// get grpc client
-		client, err := newServiceClient(protocol)
+		client, cleanup, err := newServiceClient(protocol)
 		if !assert.NoError(t, err) {
 			protocol.Close()
 			assert.FailNow(t, "unable to create client")
 		}
+
+		defer cleanup()
 
 		// get node id
 		node_id_2 = protocol.node.Identity

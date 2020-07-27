@@ -40,7 +40,6 @@ func newPendingRequest(ctx context.Context, swiper *Swiper, details *pendingRequ
 	ch := make(chan peer.AddrInfo)
 
 	ctx, addedCancel := context.WithCancel(ctx)
-	initUpdateCtx, updateCancel := context.WithCancel(ctx)
 
 	req := &pendingRequest{
 		swiper:     swiper,
@@ -49,14 +48,19 @@ func newPendingRequest(ctx context.Context, swiper *Swiper, details *pendingRequ
 	}
 
 	go func() {
+		_, updateCancel := context.WithCancel(ctx)
+		defer updateCancel()
+
 		for {
 			select {
 			case details := <-req.update:
 				updateCancel()
-				initUpdateCtx, updateCancel = context.WithCancel(ctx)
-				go req.watcher(initUpdateCtx, details, ch)
+
+				ctx, updateCancel = context.WithCancel(ctx)
+				go req.watcher(ctx, details, ch)
 
 			case <-ctx.Done():
+				updateCancel()
 				close(ch)
 				return
 			}
@@ -180,7 +184,7 @@ func (c *contactRequestsManager) enqueueRequest(contact *bertytypes.ShareableCon
 					return
 				}
 
-				stream, err := c.ipfs.NewStream(context.TODO(), addr.ID, contactRequestV1)
+				stream, err := c.ipfs.NewStream(c.ctx, addr.ID, contactRequestV1)
 				if err != nil {
 					c.logger.Error("error while opening stream with other peer", zap.Error(err))
 					return
