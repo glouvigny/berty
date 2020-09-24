@@ -829,6 +829,17 @@
     }
   },
   "definitions": {
+    "ContactState": {
+      "type": "string",
+      "enum": [
+        "Undefined",
+        "IncomingRequest",
+        "OutgoingRequestEnqueued",
+        "OutgoingRequestSent",
+        "Accepted"
+      ],
+      "default": "Undefined"
+    },
     "OrbitDBReplicationStatus": {
       "type": "object",
       "properties": {
@@ -883,6 +894,10 @@
           "format": "int64"
         },
         "devices": {
+          "type": "string",
+          "format": "int64"
+        },
+        "service_tokens": {
           "type": "string",
           "format": "int64"
         }
@@ -1013,9 +1028,6 @@
         },
         "link": {
           "type": "string"
-        },
-        "state": {
-          "$ref": "#/definitions/v1AccountState"
         },
         "service_tokens": {
           "type": "array",
@@ -1184,15 +1196,6 @@
     "v1AccountGetRequest": {
       "type": "object"
     },
-    "v1AccountState": {
-      "type": "string",
-      "enum": [
-        "Undefined",
-        "NotReady",
-        "Ready"
-      ],
-      "default": "Undefined"
-    },
     "v1AccountUpdateReply": {
       "type": "object"
     },
@@ -1288,7 +1291,7 @@
           "$ref": "#/definitions/v1Conversation"
         },
         "state": {
-          "$ref": "#/definitions/v1ContactState"
+          "$ref": "#/definitions/ContactState"
         },
         "display_name": {
           "type": "string"
@@ -1331,17 +1334,6 @@
           "type": "string"
         }
       }
-    },
-    "v1ContactState": {
-      "type": "string",
-      "enum": [
-        "Undefined",
-        "IncomingRequest",
-        "OutgoingRequestEnqueued",
-        "OutgoingRequestSent",
-        "Established"
-      ],
-      "default": "Undefined"
     },
     "v1Conversation": {
       "type": "object",
@@ -1506,7 +1498,7 @@
         "public_key": {
           "type": "string"
         },
-        "owner_public_key": {
+        "member_public_key": {
           "type": "string"
         }
       }

@@ -34,7 +34,7 @@ type service struct {
 	logger         *zap.Logger
 	protocolClient bertyprotocol.ProtocolServiceClient
 	startedAt      time.Time
-	db             *gorm.DB
+	db             *dbWrapper
 	dispatcher     *Dispatcher
 	cancelFn       func()
 	optsCleanup    func()
@@ -91,7 +91,8 @@ func New(client bertyprotocol.ProtocolServiceClient, opts *Opts) (Service, error
 	opts.Logger = opts.Logger.Named("msg")
 	opts.Logger.Debug("initializing messenger", zap.String("version", bertyversion.Version))
 
-	if err := initDB(opts.DB); err != nil {
+	db := newDBWrapper(opts.DB)
+	if err := db.initDB(); err != nil {
 		return nil, errcode.TODO.Wrap(err)
 	}
 
@@ -100,7 +101,7 @@ func New(client bertyprotocol.ProtocolServiceClient, opts *Opts) (Service, error
 		protocolClient: client,
 		logger:         opts.Logger,
 		startedAt:      time.Now(),
-		db:             opts.DB,
+		db:             db,
 		notifmanager:   opts.NotificationManager,
 		lcmanager:      opts.LifeCycleManager,
 		dispatcher:     NewDispatcher(),
@@ -118,7 +119,7 @@ func New(client bertyprotocol.ProtocolServiceClient, opts *Opts) (Service, error
 
 	// get or create account in DB
 	{
-		acc, err := getAccount(svc.db)
+		acc, err := svc.db.getAccount()
 		switch {
 		case err == gorm.ErrRecordNotFound: // account not found, create a new one
 			svc.logger.Debug("account not found, creating a new one", zap.String("pk", pkStr))
@@ -126,17 +127,13 @@ func New(client bertyprotocol.ProtocolServiceClient, opts *Opts) (Service, error
 			if err != nil {
 				return nil, err
 			}
-			acc = Account{
-				PublicKey: pkStr,
-				Link:      ret.GetHTMLURL(),
-				State:     Account_NotReady,
-			}
-			if err := svc.db.Create(&acc).Error; err != nil {
+
+			if err = svc.db.addAccount(pkStr, ret.GetHTMLURL()); err != nil {
 				return nil, err
 			}
 		case err != nil: // internal error
 			return nil, err
-		case err == nil && pkStr != acc.GetPublicKey(): // Check that we are connected to the correct node
+		case pkStr != acc.GetPublicKey(): // Check that we are connected to the correct node
 			// FIXME: use errcode
 			return nil, errcode.TODO.Wrap(errors.New("messenger's account key does not match protocol's account key"))
 		default: // account exists, and public keys match
@@ -184,8 +181,7 @@ func New(client bertyprotocol.ProtocolServiceClient, opts *Opts) (Service, error
 
 	// subscribe to groups
 	{
-		var convs []Conversation
-		err := svc.db.Find(&convs).Error
+		convs, err := svc.db.getAllConversations()
 		if err != nil {
 			return nil, err
 		}
@@ -208,16 +204,11 @@ func New(client bertyprotocol.ProtocolServiceClient, opts *Opts) (Service, error
 
 	// subscribe to contact groups
 	{
-		var contacts []Contact
-		err := svc.db.Find(&contacts).Error
+		contacts, err := svc.db.getContactsByState(Contact_OutgoingRequestSent)
 		if err != nil {
 			return nil, err
 		}
 		for _, c := range contacts {
-			if c.State != Contact_OutgoingRequestSent {
-				continue
-			}
-
 			gpkb, err := stringToBytes(c.GetConversationPublicKey())
 			if err != nil {
 				return nil, err
