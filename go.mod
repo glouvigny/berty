@@ -17,7 +17,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/buicongtan1997/protoc-gen-swagger-config v0.0.0-20190801162412-b6396e884596
 	github.com/campoy/embedmd v1.0.0
-	github.com/daixiang0/gci v0.2.8
+	github.com/daixiang0/gci v0.2.9
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/desertbit/timer v0.0.0-20180107155436-c41aec40b27f // indirect
@@ -34,6 +34,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/google/gopacket v1.1.19 // indirect
+	github.com/grandcat/zeroconf v1.0.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0
 	github.com/huandu/xstrings v1.3.2 // indirect
@@ -82,7 +83,7 @@ require (
 	github.com/multiformats/go-multistream v0.2.1
 	github.com/oklog/run v1.1.0
 	github.com/pborman/uuid v1.2.1 // indirect
-	github.com/peterbourgon/ff/v3 v3.0.0
+	github.com/peterbourgon/ff/v3 v3.1.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.10.0
 	github.com/pseudomuto/protoc-gen-doc v1.4.1
@@ -94,19 +95,16 @@ require (
 	github.com/tj/assert v0.0.3
 	github.com/zcalusic/sysinfo v0.0.0-20200820110305-ef1bb2697bc2
 	go.opencensus.io v0.22.5 // indirect
-	go.opentelemetry.io/otel v0.8.0
-	go.opentelemetry.io/otel/exporters/trace/jaeger v0.8.0
 	go.uber.org/goleak v1.1.10
 	go.uber.org/multierr v1.7.0
 	go.uber.org/zap v1.16.0
 	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83
 	golang.org/x/mobile v0.0.0-20210220033013-bdb1ca9a1e08
-	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110
-	golang.org/x/text v0.3.4 // indirect
-	golang.org/x/tools v0.1.0
+	golang.org/x/net v0.0.0-20210410081132-afb366fc7cd1
+	golang.org/x/tools v0.1.2
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
 	google.golang.org/genproto v0.0.0-20201022181438-0ff5f38871d5 // indirect
-	google.golang.org/grpc v1.37.0
+	google.golang.org/grpc v1.39.0
 	google.golang.org/grpc/examples v0.0.0-20200922230038-4e932bbcb079
 	gopkg.in/square/go-jose.v2 v2.5.1
 	gorm.io/driver/sqlite v1.1.4
@@ -132,5 +130,5 @@ replace (
 	github.com/libp2p/go-libp2p-rendezvous => github.com/berty/go-libp2p-rendezvous v0.0.0-20201028141428-5b2e7e8ff19a // use berty fork of go-libp2p-rendezvous
 	github.com/libp2p/go-libp2p-swarm => github.com/Jorropo/go-libp2p-swarm v0.4.2 // temporary, see https://github.com/libp2p/go-libp2p-swarm/pull/227
 	github.com/peterbourgon/ff/v3 => github.com/moul/ff/v3 v3.0.1 // temporary, see https://github.com/peterbourgon/ff/pull/67, https://github.com/peterbourgon/ff/issues/68
-	golang.org/x/mobile => github.com/aeddi/mobile v0.0.2 // temporary, see https://github.com/golang/mobile/pull/58
+	golang.org/x/mobile => github.com/aeddi/mobile v0.0.3-silicon // temporary, see https://github.com/golang/mobile/pull/58
 )
